@@ -125,10 +125,10 @@ class RotaryPositionalEmbedding(nn.Module):
 
     def forward(
         self, x: Float[Tensor, "... d_k"],
-        token_position: Int[Tensor, "seq_len"]
+        token_positions: Int[Tensor, "seq_len"]
     ) -> Float[Tensor, "... d_k"]:
-        cos = self.cos_cached[token_position]
-        sin = self.sin_cached[token_position]
+        cos = self.cos_cached[token_positions]
+        sin = self.sin_cached[token_positions]
         return x * cos + _rotate_pair(x) * sin
     
 def _softmax(x: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
@@ -174,7 +174,7 @@ class MultiHeadAttention(nn.Module):
     
     def forward(
         self, x: Float[Tensor, "batch_size seq_len d_model"],
-        token_position: Int[Tensor, "..."] | None = None,
+        token_positions: Int[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "batch_size seq_len d_model"]:
         seq_len = x.size(-2)
         q, k, v= self.W_q(x), self.W_k(x), self.W_v(x)
@@ -185,10 +185,10 @@ class MultiHeadAttention(nn.Module):
         v = rearrange(v, "... seq (h d) -> ... h seq d", h = self.num_heads)
 
         if self.rope is not None:
-            if token_position is None:
-                token_position = torch.arange(seq_len, device=q.device)
-            q = self.rope(q, token_position)
-            k = self.rope(k, token_position)
+            if token_positions is None:
+                token_positions = torch.arange(seq_len, device=q.device)
+            q = self.rope(q, token_positions)
+            k = self.rope(k, token_positions)
 
         # Causal Mask
         mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device))
@@ -196,7 +196,28 @@ class MultiHeadAttention(nn.Module):
         attn = rearrange(attn, "... h seq d -> ... seq (h d)", h = self.num_heads)
         return self.W_o(attn)
     
+class TransformerBlock(nn.Module):
+    def __init__(
+        self, 
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        theta: float,
+        max_seq_len: int,
+    ):
+        super().__init__()
+        self.attn = MultiHeadAttention(d_model=d_model, num_heads=num_heads, theta=theta, max_seq_len=max_seq_len)
+        self.ln1 = RMSNorm(d_model=d_model)
+        self.ffn = PositionwiseFFN(d_model=d_model, d_ff=d_ff)
+        self.ln2 = RMSNorm(d_model=d_model)
     
+    def forward(
+        self, x: Float[Tensor, "... d_model"],
+        token_positions: Int[Tensor, "..."] | None = None,
+    ) -> Float[Tensor, "... d_model"]:
+        x = x + self.attn(self.ln1(x), token_positions)
+        x = x + self.ffn(self.ln2(x))
+        return x
 
     
 
