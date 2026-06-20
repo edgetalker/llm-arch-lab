@@ -4,12 +4,13 @@ from torch import Tensor
 import torch.nn as nn
 
 from einops import einsum, rearrange
-from jaxtyping import Int, Float
+from jaxtyping import Int, Float, Bool
 
 # Linear
 class Linear(nn.Module):
     def __init__(
-        self, in_features: int,
+        self, 
+        in_features: int,
         out_features: int, 
         device: torch.device | None = None, 
         dtype: torch.dtype | None = None,
@@ -132,21 +133,21 @@ class RotaryPositionalEmbedding(nn.Module):
         return x * cos + _rotate_pair(x) * sin
     
 def _softmax(x: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
-    x = x - x.max(dim=dim, keepdim=True)
+    x = x - x.amax(dim=dim, keepdim=True)
     return x.exp() / x.exp().sum(dim=dim, keepdim=True)
 
-def scaled_dot_point_attention(
+def scaled_dot_product_attention(
     q: Float[Tensor, "... d_k"],
     k: Float[Tensor, "... d_k"],
     v: Float[Tensor, "... d_k"],
-    mask: Float[Tensor, "... d_k"] | None = None
+    mask: Bool[Tensor, "seq_q seq_k"] | None = None
 ) -> Float[Tensor, "... d_k"]:
     d_k = q.size(-1)
     score = einsum(q, k, "... q d, ... k d -> ... q k") / math.sqrt(d_k)
     if mask is not None:
         score = score.masked_fill(~mask, float('-inf'))
     attn = _softmax(score, dim=-1)
-    return einsum(attn, v, "... q k, k d -> ... q d")
+    return einsum(attn, v, "... q k, ... k d -> ... q d")
 
 class MultiHeadAttention(nn.Module):
     def __init__(
@@ -184,6 +185,7 @@ class MultiHeadAttention(nn.Module):
         k = rearrange(k, "... seq (h d) -> ... h seq d", h = self.num_heads)
         v = rearrange(v, "... seq (h d) -> ... h seq d", h = self.num_heads)
 
+        # RoPE on K V
         if self.rope is not None:
             if token_positions is None:
                 token_positions = torch.arange(seq_len, device=q.device)
@@ -192,8 +194,8 @@ class MultiHeadAttention(nn.Module):
 
         # Causal Mask
         mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device))
-        attn = scaled_dot_point_attention(q, k, v, mask)
-        attn = rearrange(attn, "... h seq d -> ... seq (h d)", h = self.num_heads)
+        attn = scaled_dot_product_attention(q, k, v, mask)
+        attn = rearrange(attn, "... h seq d -> ... seq (h d)")
         return self.W_o(attn)
     
 class TransformerBlock(nn.Module):
@@ -218,6 +220,35 @@ class TransformerBlock(nn.Module):
         x = x + self.attn(self.ln1(x), token_positions)
         x = x + self.ffn(self.ln2(x))
         return x
-
     
+class TransformerLM(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        context_length: int,
+        d_model: int,
+        num_layers: int,
+        num_heads: int,
+        d_ff: int,
+        theta: float
+    ):
+        super().__init__()
+        self.token_embeddings = Embedding(vocab_size, d_model)
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff,
+                             theta=theta, max_seq_len=context_length)
+            for _ in range(num_layers)
+        ])
+        self.ln_final = RMSNorm(d_model=d_model)
+        self.lm_head = Linear(d_model, vocab_size)
 
+    def forward(
+        self, x: Int[Tensor, "batch_size seq_len"],
+        token_positions: Float[Tensor, "..."] | None = None,
+    ) -> Float[Tensor, "... vocab_size"]:
+        x = self.token_embeddings(x)
+        if token_positions is None:
+            token_positions = torch.arange(x.size(-2), device=x.device)
+        for layer in self.layers:
+            x = layer(x, token_positions=token_positions)
+        return self.lm_head(self.ln_final(x))
