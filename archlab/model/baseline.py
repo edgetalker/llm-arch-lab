@@ -3,7 +3,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
-from einops import einsum
+from einops import einsum, rearrange
 from jaxtyping import Int, Float
 
 # Linear
@@ -148,6 +148,55 @@ def scaled_dot_point_attention(
     attn = _softmax(score, dim=-1)
     return einsum(attn, v, "... q k, k d -> ... q d")
 
+class MultiHeadAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        theta: float | None = None,
+        max_seq_len: int | None = None,
+    ):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.d_model =d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+
+        self.W_q = Linear(self.d_model, self.d_model)
+        self.W_k = Linear(self.d_model, self.d_model)
+        self.W_v = Linear(self.d_model, self.d_model)
+        self.W_o = Linear(self.d_model, self.d_model)
+
+        if max_seq_len is not None and theta is not None:
+            self.rope = RotaryPositionalEmbedding(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len)
+        else:
+            self.rope = None
+    
+    def forward(
+        self, x: Float[Tensor, "batch_size seq_len d_model"],
+        token_position: Int[Tensor, "..."] | None = None,
+    ) -> Float[Tensor, "batch_size seq_len d_model"]:
+        seq_len = x.size(-2)
+        q, k, v= self.W_q(x), self.W_k(x), self.W_v(x)
+
+        # Multi-head
+        q = rearrange(q, "... seq (h d) -> ... h seq d", h = self.num_heads)
+        k = rearrange(k, "... seq (h d) -> ... h seq d", h = self.num_heads)
+        v = rearrange(v, "... seq (h d) -> ... h seq d", h = self.num_heads)
+
+        if self.rope is not None:
+            if token_position is None:
+                token_position = torch.arange(seq_len, device=q.device)
+            q = self.rope(q, token_position)
+            k = self.rope(k, token_position)
+
+        # Causal Mask
+        mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device))
+        attn = scaled_dot_point_attention(q, k, v, mask)
+        attn = rearrange(attn, "... h seq d -> ... seq (h d)", h = self.num_heads)
+        return self.W_o(attn)
+    
+    
 
     
 
