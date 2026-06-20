@@ -80,10 +80,57 @@ class PositionwiseFFN(nn.Module):
         self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
     
     def forward(
-        self, x: Float[Tensor, "batch_size seq_len d_model"]
-    ) -> Float[Tensor, "batch_size seq_len d_model"]:
-        a = self.w1(x)
-        silu = a * torch.sigmoid(a)
-        return self.w2(silu * self.w3(x))
+        self, x: Float[Tensor, "... d_model"]
+    ) -> Float[Tensor, "... d_model"]:
+        act = self.w1(x)
+        gate = act * torch.sigmoid(act)
+        value = self.w3(x)
+        return self.w2(gate * value)
+    
+def _rotate_pair(x: Float[Tensor, "... d"]) -> Float[Tensor, "... d"]:
+    """
+    Rotate pairs by 90°: (x0, x1, x2, x3, ...) -> (-x1, x0, -x3, x2, ...)
+    """
+    x_even = x[..., ::2]
+    x_odd = x[..., 1::2]
+    x_rot = torch.stack((-x_odd, x_even), dim=-1)
+    return x_rot.flatten(-2)
+
+class RotaryPositionalEmbedding(nn.Module):
+    def __init__(
+        self,
+        theta: float,
+        d_k: int,
+        max_seq_len: int,
+        device: torch.device | None = None, 
+    ):
+        super().__init__()
+        self.d_k = d_k
+        self.theta = theta
+        self.max_seq_len = max_seq_len
+
+        # Frequencies: theta_i = theta^(-2i/d_k) for i in [0, d_k/2)
+        half_dim = torch.arange(0, d_k, 2, dtype=torch.float32, device=device)
+        inv_freq = theta ** (-half_dim / d_k)
+
+        # Outer product: positions × frequencies
+        t = torch.arange(max_seq_len, dtype=torch.float32, device=device)
+        freqs = torch.outer(t, inv_freq) #[max_seq_len, inv_freq]
+
+        cos = torch.repeat_interleave(torch.cos(freqs), 2, dim=-1)
+        sin = torch.repeat_interleave(torch.sin(freqs), 2, dim=-1)
+
+        self.register_buffer("cos_cached", cos, persistent=False)
+        self.register_buffer("sin_cached", sin, persistent=False)
+
+    def forward(
+        self, x: Float[Tensor, "... d_k"],
+        token_position: Int[Tensor, "seq_len"]
+    ) -> Float[Tensor, "... d_k"]:
+        cos = self.cos_cached[token_position]
+        sin = self.sin_cached[token_position]
+        return x * cos + _rotate_pair(x) * sin
+
+
     
 
