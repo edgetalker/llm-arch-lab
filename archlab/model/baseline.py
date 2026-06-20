@@ -130,6 +130,23 @@ class RotaryPositionalEmbedding(nn.Module):
         cos = self.cos_cached[token_position]
         sin = self.sin_cached[token_position]
         return x * cos + _rotate_pair(x) * sin
+    
+def _softmax(x: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
+    x = x - x.max(dim=dim, keepdim=True)
+    return x.exp() / x.exp().sum(dim=dim, keepdim=True)
+
+def scaled_dot_point_attention(
+    q: Float[Tensor, "... d_k"],
+    k: Float[Tensor, "... d_k"],
+    v: Float[Tensor, "... d_k"],
+    mask: Float[Tensor, "... d_k"] | None = None
+) -> Float[Tensor, "... d_k"]:
+    d_k = q.size(-1)
+    score = einsum(q, k, "... q d, ... k d -> ... q k") / math.sqrt(d_k)
+    if mask is not None:
+        score = score.masked_fill(~mask, float('-inf'))
+    attn = _softmax(score, dim=-1)
+    return einsum(attn, v, "... q k, k d -> ... q d")
 
 
     
