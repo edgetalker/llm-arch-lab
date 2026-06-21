@@ -119,7 +119,6 @@ def gradient_clipping(
 
     return total_norm
 
-
 def get_batch(
     dataset: Union[list[int], np.ndarray, torch.Tensor],
     batch_size: int,
@@ -134,13 +133,16 @@ def get_batch(
     n = len(data)
     assert n >= context_length + 1
 
-    starts = np.random(0, n - context_length, size = batch_size)
+    starts = np.random.randint(0, n - context_length, size = batch_size)
 
     # slice 
     x = np.stack([data[s: s + context_length] for s in starts]).astype(np.int64)
     y = np.stack([data[s+1: s + context_length + 1] for s in starts]).astype(np.int64)
 
-    if "cuda" in device:
+    x = torch.from_numpy(x)
+    y = torch.from_numpy(y)
+
+    if torch.device(device).type == "cuda":
         x = x.pin_memory().to(device, non_blocking=True)
         y = y.pin_memory().to(device, non_blocking=True)
     else:
