@@ -252,3 +252,10 @@ class TransformerLM(nn.Module):
         for layer in self.layers:
             x = layer(x, token_positions=token_positions)
         return self.lm_head(self.ln_final(x))
+
+
+if __name__ == "__main__":
+    lm = TransformerLM(vocab_size=256, context_length=16, d_model=64, num_layers=2, num_heads=4, d_ff=128, theta=10000.0)
+    x = torch.randint(0, 256, (2, 16))
+    logits = lm(x)
+    print(logits.size())

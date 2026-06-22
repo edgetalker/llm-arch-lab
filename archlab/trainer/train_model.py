@@ -1,6 +1,8 @@
+import os
 import torch
 import numpy as np
 import math
+import typing
 from torch import Tensor
 from jaxtyping import Float, Int
 from typing import Optional, Union
@@ -150,3 +152,28 @@ def get_batch(
         y = y.to(device)
     
     return x, y
+
+def save_checkpoint(
+    model: torch.nn.Module, 
+    optimizer: torch.optim.Optimizer, 
+    iteration: int, 
+    out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
+):
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "iteration": iteration,
+        },
+        out,
+    )
+
+def load_checkpoint(
+    src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer
+):
+    obj = torch.load(src, weights_only=False, map_location="cpu")
+    model.load_state_dict(obj["model"])
+    optimizer.load_state_dict(obj["optimizer"])
+    return obj["iteration"]
