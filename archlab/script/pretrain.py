@@ -1,7 +1,10 @@
+from pathlib import Path
+import math
 import torch
 import time
 import numpy as np
 import random
+
 from dataclasses import asdict
 
 from archlab.model.baseline import TransformerLM
@@ -54,6 +57,31 @@ def evaluate(model, val_data, cfg, device) -> float:
     model.train()
     return losses.mean().item()   
 
+def save_with_retention(model, optimizer, step, cfg):
+    ckpt_dir = Path(cfg.io.ckpt_dir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    
+    path = ckpt_dir / f"step_{step:07d}.pt"
+    save_checkpoint(model, optimizer, step, path)
+    
+    # 滚动删除
+    ckpts = sorted(ckpt_dir.glob("step_*.pt"), key=lambda p: p.stat().st_mtime)
+    for old in ckpts[:-cfg.io.keep_last_k]:
+        old.unlink()
+    
+    # 更新 latest
+    latest = ckpt_dir / "latest.pt"
+    if latest.exists() or latest.is_symlink():
+        latest.unlink()
+    latest.symlink_to(path.name)
+
+
+def maybe_resume(model, optimizer, cfg):
+    if not cfg.io.resume_from:
+        return 0
+    return load_checkpoint(cfg.io.resume_from, model, optimizer)
+
+
 def main():
     cfg = parse_args()
     set_seed(cfg.train.seed)
@@ -69,6 +97,9 @@ def main():
     # 模型 + 优化器
     model = build_model(cfg.model, device)
     optimizer = build_optimizer(model, cfg.optim)
+    start_step = maybe_resume(model, optimizer, cfg)
+    if start_step > 0:
+        print(f"resumed from step {start_step}")
     n_params = sum(p.numel() for p in model.parameters())
     print(f"params: {n_params / 1e6:.2f}M")
 
@@ -76,7 +107,7 @@ def main():
     model.train()
     t_log = time.time()
 
-    for step in range(cfg.train.total_iters):
+    for step in range(start_step, cfg.train.total_iters):
         # 1. LR schedule
         lr = get_lr_cosine_schedule(
             step,
@@ -123,6 +154,12 @@ def main():
         if step > 0 and step % cfg.train.eval_interval == 0:
             val_loss = evaluate(model, val_data, cfg, device)
             print(f"step {step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {math.exp(val_loss):.2f}")
+
+        # 6. ckp
+        if step > 0 and step % cfg.train.ckpt_interval == 0:
+            save_with_retention(model, optimizer, step, cfg)
+
+    save_with_retention(model, optimizer, cfg.train.total_iters, cfg)
 
 if __name__ == "__main__":
     main()

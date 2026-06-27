@@ -45,6 +45,7 @@ class IOConfig:
     val_data_path: str
     ckpt_dir: str
     resume_from: Optional[str] = None
+    keep_last_k: int = 3
 
 @dataclass
 class Config:

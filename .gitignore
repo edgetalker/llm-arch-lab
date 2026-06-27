@@ -8,7 +8,7 @@ __pycache__/
 
 # Training Data
 data
-
+runs
 # Distribution / packaging
 .Python
 build/
