@@ -1,10 +1,10 @@
 model:
   vocab_size: 10000
   context_length: 256
-  d_model: 128
-  num_layers: 2
-  num_heads: 4
-  d_ff: 512
+  d_model: 512
+  num_layers: 4
+  num_heads: 16
+  d_ff: 1344
   theta: 10000.0
 
 optim:
@@ -14,27 +14,27 @@ optim:
   weight_decay: 0.1
   max_lr: 3.0e-4
   min_lr: 3.0e-5
-  warmup_iters: 100
-  cosine_cycle_iters: 1000
+  warmup_iters: 500
+  cosine_cycle_iters: 20000
   grad_clip: 1.0
 
 train:
-  batch_size: 8
-  total_iters: 200
+  batch_size: 64
+  total_iters: 20000
   seed: 42
   device: auto
   dtype: float32
-  log_interval: 10
-  eval_interval: 50
-  eval_iters: 20
-  ckpt_interval: 100
+  log_interval: 100
+  eval_interval: 500
+  eval_iters: 100
+  ckpt_interval: 1000
 
 io:
   train_data_path: data/tinystories_train.bin
   val_data_path: data/tinystories_val.bin
-  ckpt_dir: runs/smoke
+  ckpt_dir: runs/tinystory
   resume_from: null
   keep_last_k: 3
   wandb_project: cs336-archlab
-  wandb_run_name: smoke_test
+  wandb_run_name: tinystory_v1
   no_wandb: false

@@ -9,6 +9,8 @@ __pycache__/
 # Training Data
 data
 runs
+wandb
+
 # Distribution / packaging
 .Python
 build/

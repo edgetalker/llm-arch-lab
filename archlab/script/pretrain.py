@@ -1,9 +1,10 @@
-from pathlib import Path
 import math
 import torch
 import time
 import numpy as np
 import random
+import wandb
+from pathlib import Path
 
 from dataclasses import asdict
 
@@ -81,12 +82,22 @@ def maybe_resume(model, optimizer, cfg):
         return 0
     return load_checkpoint(cfg.io.resume_from, model, optimizer)
 
+def init_wandb(cfg):
+    if cfg.io.no_wandb:
+        return None
+    return wandb.init(
+        project=cfg.io.wandb_project,
+        name=cfg.io.wandb_run_name,
+        config=asdict(cfg),
+        resume="allow" if cfg.io.resume_from else None,
+    )
 
 def main():
     cfg = parse_args()
     set_seed(cfg.train.seed)
     device = resolve_device(cfg.train.device)
     print(f"device: {device}")
+    wandb = init_wandb(cfg) 
 
     # 数据
     train_data = np.memmap(cfg.io.train_data_path, dtype=np.uint16, mode="r")
@@ -141,25 +152,40 @@ def main():
             dt = now - t_log
             tok_per_step = cfg.train.batch_size * cfg.model.context_length
             tok_per_sec = tok_per_step * cfg.train.log_interval / max(dt, 1e-6)
+            metrics = {
+                "train/loss": loss.item(),
+                "train/lr": lr,
+                "train/grad_norm": grad_norm,
+                "train/tok_per_sec": tok_per_sec,
+            }
+            
+            if wandb is not None:
+                wandb.log(metrics, step=step)
+            
             print(
-                f"step {step:5d}  "
-                f"loss {loss.item():.4f}  "
-                f"lr {lr:.2e}  "
-                f"|g| {grad_norm:.3f}  "
-                f"tok/s {tok_per_sec:.0f}"
+                f"step {step:5d}  loss {loss.item():.4f}  lr {lr:.2e}  "
+                f"|g| {grad_norm:.3f}  tok/s {tok_per_sec:.0f}"
             )
             t_log = now
 
         # 5. eval
         if step > 0 and step % cfg.train.eval_interval == 0:
             val_loss = evaluate(model, val_data, cfg, device)
-            print(f"step {step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {math.exp(val_loss):.2f}")
-
+            val_ppl = math.exp(val_loss)
+            
+            if wandb is not None:
+                wandb.log({"val/loss": val_loss, "val/ppl": val_ppl}, step=step)
+            
+            print(f"step {step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {val_ppl:.2f}")
+        
         # 6. ckp
         if step > 0 and step % cfg.train.ckpt_interval == 0:
             save_with_retention(model, optimizer, step, cfg)
 
     save_with_retention(model, optimizer, cfg.train.total_iters, cfg)
 
+    if wandb is not None:
+        wandb.finish()
+        
 if __name__ == "__main__":
     main()

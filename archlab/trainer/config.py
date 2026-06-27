@@ -46,6 +46,10 @@ class IOConfig:
     ckpt_dir: str
     resume_from: Optional[str] = None
     keep_last_k: int = 3
+    # wandb
+    no_wandb: bool = True                       # 默认关闭,smoke debug 用
+    wandb_project: str = "cs336-archlab"
+    wandb_run_name: Optional[str] = None        # None 时 wandb 自动生成
 
 @dataclass
 class Config:

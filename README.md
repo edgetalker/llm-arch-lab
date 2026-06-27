@@ -60,6 +60,13 @@ last 5 merges learned:
 ==================================================
 all done in 1568.2s
 ```
+
+## Ablation
++ learning rate: 
++ learning rate warmup:
++ AdamW hyperparameters
++ weight decay
+
 ## Status
 - [x] BPE tokenizer (32k vocab, OWT)
 - [x] Transformer body: RMSNorm, RoPE, SwiGLU, GQA
