@@ -1,4 +1,3 @@
-import argparse
 import torch
 import time
 import numpy as np
@@ -38,9 +37,22 @@ def build_optimizer(model, cfg):
         weight_decay=cfg.weight_decay,
     )
 
-
+@torch.no_grad()
 def evaluate(model, val_data, cfg, device) -> float:
-    pass  # TODO
+    model.eval()
+    losses = torch.zeros(cfg.train.eval_iters, device=device)
+    for k in range(cfg.train.eval_iters):
+        x, y = get_batch(
+            val_data,
+            cfg.train.batch_size,
+            cfg.model.context_length,
+            str(device)
+        )
+        logits = model(x)
+        loss = cross_entropy(logits, y)
+        losses[k] = loss
+    model.train()
+    return losses.mean().item()   
 
 def main():
     cfg = parse_args()
@@ -106,6 +118,11 @@ def main():
                 f"tok/s {tok_per_sec:.0f}"
             )
             t_log = now
+
+        # 5. eval
+        if step > 0 and step % cfg.train.eval_interval == 0:
+            val_loss = evaluate(model, val_data, cfg, device)
+            print(f"step {step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {math.exp(val_loss):.2f}")
 
 if __name__ == "__main__":
     main()

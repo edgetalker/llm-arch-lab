@@ -11,12 +11,12 @@ from collections.abc import Callable, Iterable
 def cross_entropy(
     logits: Float[Tensor, "... vocab_size"],
     targets: Int[Tensor, "..."]
-) -> float:
-    max = logits.amax(dim=-1, keepdim=True)
-    z = logits - max
-    lse = max.squeeze(-1) + torch.log(torch.exp(z).sum(-1))
+) -> Tensor:
+    logit_max = logits.amax(dim=-1, keepdim=True)
+    z = logits - logit_max
+    lse = logit_max.squeeze(-1) + torch.log(torch.exp(z).sum(-1))
 
-    tgt_logit = logits.gather(1, targets.unsqueeze(-1)).squeeze(-1)
+    tgt_logit = logits.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
     log_prob = lse - tgt_logit
 
     return log_prob.mean()

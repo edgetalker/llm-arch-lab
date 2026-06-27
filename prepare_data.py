@@ -20,7 +20,7 @@ TOKEN_DTYPE      = np.uint16
 
 JOBS = [
     ("data/TinyStoriesV2-GPT4-valid.txt", "data/tinystories_val.bin"),
-    # ("data/TinyStoriesV2-GPT4-train.txt", "data/tinystories_train.bin"),
+    ("data/TinyStoriesV2-GPT4-train.txt", "data/tinystories_train.bin"),
 ]
 # ==============================
 
@@ -30,9 +30,9 @@ def encode_file(tokenizer: Tokenizer, input_txt: str, output_bin: str) -> None:
     output_path = Path(output_bin)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    input_size_mb = input_path.stat().st_size / 1e6
+    input_size_mb = input_path.stat().st_size / 1e9
     print(f"\n=== {input_path.name} → {output_path.name} ===")
-    print(f"input size: {input_size_mb:.1f} MB")
+    print(f"input size: {input_size_mb:.1f} GB")
     
     t0 = time.time()
     ids: list[int] = []
