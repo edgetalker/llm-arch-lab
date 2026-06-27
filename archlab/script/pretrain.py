@@ -1,11 +1,12 @@
 import argparse
 import torch
+import time
 import numpy as np
 import random
 from dataclasses import asdict
 
 from archlab.model.baseline import TransformerLM
-from archlab.trainer.train_model import AdamW, get_batch, cross_entropy, gradient_clipping
+from archlab.trainer.train_model import *
 from archlab.trainer.config_loader import parse_args
 
 
@@ -42,54 +43,69 @@ def evaluate(model, val_data, cfg, device) -> float:
     pass  # TODO
 
 def main():
-    # 1. 解析配置 + 准备输出目录
     cfg = parse_args()
-    # TODO: mkdir, dump_config
-
-    # 2. 全局初始化
     set_seed(cfg.train.seed)
     device = resolve_device(cfg.train.device)
+    print(f"device: {device}")
 
-    # 3. 数据
+    # 数据
     train_data = np.memmap(cfg.io.train_data_path, dtype=np.uint16, mode="r")
-    
-    # 4. 模型 + 优化器
+    val_data   = np.memmap(cfg.io.val_data_path,   dtype=np.uint16, mode="r")
+    print(f"train tokens: {len(train_data):,}")
+    print(f"val tokens:   {len(val_data):,}")
+
+    # 模型 + 优化器
     model = build_model(cfg.model, device)
     optimizer = build_optimizer(model, cfg.optim)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"params: {n_params / 1e6:.2f}M")
 
+    # 训练循环
+    model.train()
+    t_log = time.time()
 
-    x, y = get_batch(train_data, cfg.train.batch_size, cfg.model.context_length, str(device))
-    print("x.shape:", x.shape, "y.shape:", y.shape, "x.dtype:", x.dtype)
-    
-    logits = model(x)
-    print("logits.shape:", logits.shape)
-    
-    loss = cross_entropy(logits, y)
-    print(f"initial loss: {loss.item():.4f}")
-    
-    loss.backward()
-    grad_norm = gradient_clipping(model.parameters(), cfg.optim.grad_clip)
-    print(f"grad_norm: {grad_norm:.4f}")
-    
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)
-    print("step 1 done")
+    for step in range(cfg.train.total_iters):
+        # 1. LR schedule
+        lr = get_lr_cosine_schedule(
+            step,
+            cfg.optim.max_lr,
+            cfg.optim.min_lr,
+            cfg.optim.warmup_iters,
+            cfg.optim.cosine_cycle_iters,
+        )
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
-    
-    # 5. resume（可选）
-    start_step = 0
-    # TODO
+        # 2. 采 batch
+        x, y = get_batch(
+            train_data,
+            cfg.train.batch_size,
+            cfg.model.context_length,
+            str(device),
+        )
 
-    # 6. wandb（可选）
-    # TODO
+        # 3. forward + backward
+        logits = model(x)
+        loss = cross_entropy(logits, y)
+        loss.backward()
+        grad_norm = gradient_clipping(model.parameters(), cfg.optim.grad_clip)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
 
-    # 7. 主循环
-    for step in range(start_step, cfg.train.total_iters):
-        pass  # TODO: train_step + log + eval + ckpt
-
-    # 8. 收尾存档
-    # TODO
-
+        # 4. log
+        if step % cfg.train.log_interval == 0:
+            now = time.time()
+            dt = now - t_log
+            tok_per_step = cfg.train.batch_size * cfg.model.context_length
+            tok_per_sec = tok_per_step * cfg.train.log_interval / max(dt, 1e-6)
+            print(
+                f"step {step:5d}  "
+                f"loss {loss.item():.4f}  "
+                f"lr {lr:.2e}  "
+                f"|g| {grad_norm:.3f}  "
+                f"tok/s {tok_per_sec:.0f}"
+            )
+            t_log = now
 
 if __name__ == "__main__":
     main()

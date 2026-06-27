@@ -16,8 +16,9 @@ cd ..
 
 ## Tokenizer
 ### TinyStory
++ train_bpe
 ```
-input:      /Users/kevinpan/Workspace/llm-arch-lab/data/TinyStoriesV2-GPT4-train.txt
+input:     llm-arch-lab/data/TinyStoriesV2-GPT4-train.txt
 input size: 2227.8 MB
 vocab_size: 10000
 special:    ['<|endoftext|>']
@@ -44,6 +45,20 @@ last 5 merges learned:
   9740: b' meadow' + b's' → b' meadows'
   9741: b' imag' + b'inary' → b' imaginary'
   9742: b' bo' + b'ld' → b' bold'
+```
++ encode(540M~ Token)
+```
+...
+[1556.1s]  540,498,265 tokens  (347.3k tok/s)
+
+  done in 1567.1s (encode 1556.9s + write 10.1s)
+  tokens:      540,796,778
+  output size: 1081.6 MB
+  range:       [9, 9999]
+  compression: 2.06x
+
+==================================================
+all done in 1568.2s
 ```
 ## Status
 - [x] BPE tokenizer (32k vocab, OWT)

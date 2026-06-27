@@ -30,7 +30,7 @@ train:
   ckpt_interval: 100
 
 io:
-  train_data_path: data/TinyStoriesV2-GPT4-valid.txt
+  train_data_path: data/tinystories_val.bin
   val_data_path: data/tinystories_val.bin
   ckpt_dir: runs/smoke
   resume_from: null
