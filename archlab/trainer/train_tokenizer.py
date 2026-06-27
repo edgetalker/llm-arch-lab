@@ -74,7 +74,7 @@ def train_bpe(
     special_tokens: list[str]      
 ):
     # Vocabulary initialization
-    vocab = {i: bytes[i] for i in range(256)}
+    vocab = {i: bytes([i]) for i in range(256)}
     start_index = len(vocab)
     for i, tokens in enumerate(special_tokens):
         vocab[start_index + i] = tokens.encode("utf-8")
@@ -83,7 +83,7 @@ def train_bpe(
     with open(input_path, "rb") as f:
         boundaries = find_chunk_boundaries(f, 16, special_tokens[0].encode("utf-8"))
 
-    args = [(input_path, s, e, special_tokens, s, e) for s, e in zip(boundaries[:-1], boundaries[1:])]
+    args = [(input_path, s, e, special_tokens) for s, e in zip(boundaries[:-1], boundaries[1:])]
     with Pool(processes=4) as pool:
         local_counters = pool.starmap(process_chunk, args)
 

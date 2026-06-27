@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 @dataclass
@@ -7,9 +7,9 @@ class ModelConfig:
     context_length: int
     d_model: int
     d_ff: int
-    n_heads: int
-    n_layers: int
-    rope_theta: float = 10000.0
+    num_layers: int
+    num_heads: int
+    theta: float = 10000.0
 
 @dataclass
 class OptimConfig:

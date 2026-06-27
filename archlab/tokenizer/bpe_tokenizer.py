@@ -19,17 +19,18 @@ class Tokenizer:
         )
         self.lookup = {v: k for k, v in vocab.items()}
         self.pretoken_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-
+    
+    @classmethod
     def from_files(
         cls, vocab_filepath: str, 
         merges_filepath: str, 
-        special_token: list[str] | None = None
+        special_tokens: list[str] | None = None
     ):
         with open(vocab_filepath, "rb") as f:
             vocab = pickle.load(f)
         with open(merges_filepath, "rb") as f:
             merges = pickle.load(f)
-        return cls(vocab,merges,special_token)
+        return cls(vocab,merges, special_tokens)
     
     def _merge_word(
         self,

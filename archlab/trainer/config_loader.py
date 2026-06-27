@@ -3,7 +3,7 @@ import yaml
 from dataclasses import asdict
 from pathlib import Path
 
-from config import Config, ModelConfig, OptimConfig, TrainConfig, IOConfig
+from archlab.trainer.config import Config, ModelConfig, OptimConfig, TrainConfig, IOConfig
 
 
 def load_config(yaml_path: str) -> Config:
