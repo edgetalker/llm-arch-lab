@@ -6,6 +6,8 @@ import torch.nn as nn
 from einops import einsum, rearrange
 from jaxtyping import Int, Float, Bool
 
+from archlab.tokenizer.bpe_tokenizer import Tokenizer
+
 # Linear
 class Linear(nn.Module):
     def __init__(
@@ -253,6 +255,78 @@ class TransformerLM(nn.Module):
             x = layer(x, token_positions=token_positions)
         return self.lm_head(self.ln_final(x))
 
+################## Generate ##################
+
+@torch.no_grad()
+def _sample_next_token(
+    logits: torch.Tensor,        # (1, vocab_size)
+    temperature: float = 1.0,
+    top_p: float | None = None,  # None 表示不做 top-p 截断
+) -> torch.Tensor:
+    if temperature == 0:
+        return logits.argmax(dim=-1)
+    else:
+        logits = logits / temperature
+
+    probs = _softmax(logits, -1)
+
+    if top_p is not None:
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        mask = cumulative_probs > top_p
+        mask[:, 1:] = mask[:, :-1].clone()
+        mask[:, 0] = False
+
+        sorted_probs[mask] = 0.0
+        filtered_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
+
+        sampled_position = torch.multinomial(filtered_probs, num_samples=1)
+        next_token = sorted_indices.gather(-1, sampled_position) 
+    else:
+        next_token = torch.multinomial(probs, num_samples=1)
+
+    return next_token
+
+@torch.no_grad()
+def generate(
+    model: TransformerLM,
+    tokenizer: Tokenizer,
+    prompt: str,
+    max_new_tokens: int = 256,
+    temperature: float = 1.0,
+    top_p: float | None = 0.9,
+    eot_token: str = "<|endoftext|>",
+    device: str = "cuda",
+) -> str:
+    model.eval()
+
+    prompt_ids = tokenizer.encode(prompt)
+    input_ids = torch.tensor(prompt_ids, dtype=torch.long, device=device).unsqueeze(0) #(1, length)
+
+    eot_ids = tokenizer.encode(eot_token)
+    assert len(eot_ids) == 1, f"eot_token should encode to 1 id, got {eot_ids}"
+    eot_id = eot_ids[0]
+    
+    context_length = model.context_length
+
+    generated_ids = []
+    for _ in range(max_new_tokens):
+        input_window = input_ids[:, -context_length:]
+
+        logits = model(input_window)    # (1, T, vocab_size)
+        last_logits = logits[:, -1, :] # (1, vocab_size)
+
+        next_token = _sample_next_token(last_logits, temperature, top_p)
+
+        next_id = next_token.item()
+        if next_id == eot_id:
+            break
+
+        generated_ids.append(next_id)
+        input_ids = torch.cat([input_ids, next_token], dim=-1) # (1, T+1)
+        
+    return tokenizer.decode(generated_ids)
 
 if __name__ == "__main__":
     lm = TransformerLM(vocab_size=256, context_length=16, d_model=64, num_layers=2, num_heads=4, d_ff=128, theta=10000.0)
