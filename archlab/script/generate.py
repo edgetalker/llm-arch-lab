@@ -23,8 +23,8 @@ def main():
     
     # 1. 加载 tokenizer
     tokenizer = Tokenizer.from_files(
-        "data/tokenizer/vocab.pkl",
-        "data/tokenizer/merges.pkl",
+        "archlab/tokenizer/tinystory/vocab.pkl",
+        "archlab/tokenizer/tinystory/merges.pkl",
         ["<|endoftext|>"],
     )
     
@@ -32,8 +32,7 @@ def main():
     model = TransformerLM(**asdict(cfg.model)).to(device)
     
     # 3. 加载 ckpt(注意 generate 时只需要 model weight,optimizer 不用)
-    obj = load_checkpoint(args.ckpt, weights_only=False, map_location=device)
-    model.load_state_dict(obj["model"])
+    obj = load_checkpoint(args.ckpt, model)
     model.eval()
     
     # 4. 生成

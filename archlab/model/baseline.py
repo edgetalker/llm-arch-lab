@@ -241,6 +241,7 @@ class TransformerLM(nn.Module):
                              theta=theta, max_seq_len=context_length)
             for _ in range(num_layers)
         ])
+        self.context_length = context_length
         self.ln_final = RMSNorm(d_model=d_model)
         self.lm_head = Linear(d_model, vocab_size)
 

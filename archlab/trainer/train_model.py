@@ -171,9 +171,10 @@ def save_checkpoint(
 def load_checkpoint(
     src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer
+    optimizer: torch.optim.Optimizer | None = None
 ):
     obj = torch.load(src, weights_only=False, map_location="cpu")
     model.load_state_dict(obj["model"])
-    optimizer.load_state_dict(obj["optimizer"])
+    if optimizer is not None:
+        optimizer.load_state_dict(obj["optimizer"])
     return obj["iteration"]
