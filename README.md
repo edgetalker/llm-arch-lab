@@ -1,5 +1,12 @@
+# archlab
+
+A from-scratch LLM pretraining lab in PyTorch. Starts with a 22.7M-parameter 
+dense Transformer baseline on TinyStories (val_loss = 1.344), with planned 
+ablations on MoE and linear-attention architectures.
+
 > 📚 Course version: CS336 Spring 2026  
-> 📁 This repo covers: Lab 1 Basics 
+> 📁 This repo covers: Lab 1 Basics
+
 
 ## Results
 
@@ -110,8 +117,11 @@ python -m archlab.script.generate \
 ```
 
 ## Status
-- [x] BPE tokenizer (32k vocab, OWT)
-- [x] Transformer body: RMSNorm, RoPE, SwiGLU, GQA
-- [ ] Training loop (in progress)
+
+- [x] BPE tokenizer (vocab=10000, trained on TinyStories)
+- [x] Transformer LM (RMSNorm, RoPE, SwiGLU, multi-head attention)
+- [x] Training loop with checkpointing, resume, wandb integration
+- [x] LR hyperparameter sweep (KR1, val_loss=1.366)
+- [x] Batch size experiment (KR2, val_loss=1.344 @ bsz=128)
 - [ ] MoE variant (8 experts, top-2)
 - [ ] Linear attention ablation
