@@ -109,36 +109,6 @@ python -m archlab.script.generate \
   --temperature 0.8 --top-p 0.9
 ```
 
-
-
-
-## Generate
-```python
-python -m archlab.script.generate \
-  --config archlab/configs/tinystory.yaml \
-  --ckpt runs/tinystory/latest.pt \
-  --prompt "Once upon a time, there was" \
-  --temperature 0.8 \
-  --top-p 0.9
-```
-+ case study
-+ lr = 3e-4 && val_loss = 1.47
-```
-Once upon a time, a little cat wanted to find his mom. Then,
-he saw a big dog. The dog wanted to know what was behind the door. The cat was scared of the big dog.
-The cat said, "Do not be scared. I will help you find your mom." The dog was happy. They walked together and found the big dog. The big dog was not scared anymore. He said, "Thank you, little cat. You are a good friend."
-The moral of the story is to be brave and help others when they need it.
-```
-+ lr = 3e-3 && val_loss = 1.36
-```
-Once upon a time, a little cat wanted to find his mom. Then,
-he saw a big dog. The dog had a collar. The cat said, "I can't find your mom!" The dog looked at the cat and said, "I can help you!"
-The cat and the dog looked for the dog's mom. They walked and walked. They asked other animals if they saw her. No one said it was his mom. But then, they saw something unexpected. A big bird was in the tree! The cat and the dog were scared.
-The cat said, "I'm sorry, I was just playing. I don't know where my mom is." The dog said, "It's okay, cat. I'm just playing." The cat, the dog, and the bird became friends. They found the cat's mom, and she was happy. The cat's mom said, "I missed you, cat. Thank you for helping me." The cat and the dog were not sad anymore. They were friends forever.
-```
-
-
-
 ## Status
 - [x] BPE tokenizer (32k vocab, OWT)
 - [x] Transformer body: RMSNorm, RoPE, SwiGLU, GQA
