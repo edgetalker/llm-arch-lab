@@ -37,7 +37,7 @@ scaled to maintain a fixed ~328M token budget. AdamW, cosine schedule with warmu
 | --- | --- | ---| --- | --- | --- |
 | 32 | 40000 | 1000 | 1.415 | 0.25| 100k 
 | 64 | 20000 | 500 | 1.365 | 0.18 | 100k
-| 128 | 10000 | 250 |🏅 1.344| 0.13 | 100k
+| 128 | 10000 | 250 |🏅1.344| 0.13 | 100k
 
 
 ![BSZ Sweep](assets/bsz_sweep.png)
@@ -62,8 +62,24 @@ scaled to maintain a fixed ~328M token budget. AdamW, cosine schedule with warmu
    reduction making optimization more stable, while the LR remains tuned for the 
    bsz=64 reference.
 
-**Practical implication**: For this setup, bsz=128 strictly dominates — same 
-throughput, lower final loss. The "default bsz=64" choice is not optimal here.
+### Layer Normalization
+**Setup**: Compared modern pre-norm vs the original post-norm formulation vs no-norm, lr = 3e-3
+
+| variant | LR| val_loss | 
+| --- | --- |  --- | 
+| no-norm | 3e-3 | NaN | 
+| no-norm | 3e-4 | 1.505 | 
+| post-norm | 3e-3 | 1.420 |
+| pre-norm | 3e-3 | 🏅1.365
+
+![layer_norm](assets/layernorm_sweep.png)
+
+**Interpretation**: The advantage of pre-norm is real but **depth-dependent**. 
+At this scale, post-norm remains viable; at production scale, pre-norm's 
+benefits compound. This is consistent with the empirical shift from 
+post-norm (Transformer 2017, BERT) to pre-norm (GPT-2/3, LLaMA) as 
+model depth grew.
+
 ## Generation samples
 
 Same prompt: `"Once upon a time, there was"`, temperature=0.8, top-p=0.9.
