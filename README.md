@@ -10,30 +10,28 @@ ablations on MoE and linear-attention architectures.
 
 ## Results
 
-### LR Sweep (KR1)
+### LR Sweep 
 **Setup**: 22.7M params, batch=64, context=256, 20k steps, ~328M tokens.
 
-| LR | val_loss| PPL | Notes |
+| LR | val_loss| PPL | |
 | --- | --- | ---| --- |
-| 3e-4 | 1.478 | 4.38 |> 1.45 |
-| 1e-3 | 1.379 | 3.97 |✅ |
-| 3e-3 | 1.365 | 3.91 |🏅 |
+| 3e-4 | 1.478 | 4.38 | ❌ |
+| 1e-3 | 1.379 | 3.97 | ✅ |
+| 3e-3 | 1.365 | 3.91 |🏅 best|
 | 1e-2 | 1.424 | 4.15 |✅ |
 
 ![LR Sweep](assets/lr_sweep.png)
 
-**Search strategy**: half-decade grid scan around the 3e-4 baseline. 
-The U-shape across {3e-4, 1e-3, 3e-3, 1e-2} establishes both bounds 
-of the search interval.  
-The 1e-3 vs 3e-3 gap (0.014) is within batch noise, so no second-stage 
-refinement was performed.
+**Search strategy**: half-decade grid scan around 3e-4. The U-shape across 
+{3e-4, 1e-3, 3e-3, 1e-2} bounds the search interval; lr=3e-3 yields the lowest 
+val_loss at step 20000.
 
-### Batch Size Experiment (KR2)
+### Batch Size Experiment 
 
-**Setup**: All runs use the optimal LR from KR1 (lr=3e-3), with total iterations 
-scaled to maintain a fixed ~328M token budget. AdamW, cosine schedule with warmup.
+**Setup**: Fixed token budget (~328M); total_iters scaled inversely with 
+batch_size. LR=3e-3 held constant.
 
-| batch_size | total_iters| warmup | val_loss | grad norm | tok/s |
+| batch_size | total_iters| warmup | val_loss | grad_norm | tok/s |
 | --- | --- | ---| --- | --- | --- |
 | 32 | 40000 | 1000 | 1.415 | 0.25| 100k 
 | 64 | 20000 | 500 | 1.365 | 0.18 | 100k
@@ -43,42 +41,38 @@ scaled to maintain a fixed ~328M token budget. AdamW, cosine schedule with warmu
 ![BSZ Sweep](assets/bsz_sweep.png)
 
 **Findings**:
+1. **Gradient noise ∝ 1/√B**: grad_norm at bsz=32 is 1.9× that of bsz=128, 
+   matching √(128/32)=2.0×.
+2. **Throughput saturated at bsz=32**: ~100k tok/s across all bsz on RTX 4090; 
+   compute saturation precedes memory limits at this model size.
+3. **Larger batches → lower val_loss**: 1.415 → 1.365 → 1.344. Note: LR=3e-3 
+   was tuned at bsz=64 (KR1); the bsz=128 advantage may be larger under 
+   re-tuned LR (sqrt scaling suggests ~4.2e-3 for bsz=128).
 
-1. **Gradient noise scales as 1/√B, as predicted by theory.** Mid-training 
-   grad_norm at bsz=32 is ~1.9× that of bsz=128, closely matching the theoretical 
-   √(128/32)=2.0× ratio. This confirms that larger batches produce more stable 
-   gradient estimates.
-
-2. **Throughput is saturated even at bsz=32.** All three batch sizes reach 
-   ~100k tok/s on RTX 4090 — increasing batch size beyond 32 yields no throughput 
-   gain for this 22.7M-parameter model. For small models on modern GPUs, GPU 
-   memory is no longer the practical constraint on batch size; compute saturation 
-   is reached well before memory limits.
-
-3. **Larger batches achieve marginally lower final val_loss.** Under fixed token 
-   budget, val_loss improves monotonically with batch size (bsz=32: 1.41, 
-   bsz=128: 1.35), but with diminishing returns (0.02 gap between bsz=64 and 128 
-   vs 0.04 gap between bsz=32 and 64). This is consistent with the gradient noise 
-   reduction making optimization more stable, while the LR remains tuned for the 
-   bsz=64 reference.
 
 ### Layer Normalization
-**Setup**: Compared modern pre-norm vs the original post-norm formulation vs no-norm, lr = 3e-3
+**Setup**: Three variants tested. RMSNorm removal (no-norm) was retried at 
+a lower LR after divergence, per assignment instruction.
 
-| variant | LR| val_loss | 
+| Variant | LR| val_loss | 
 | --- | --- |  --- | 
-| no-norm | 3e-3 | NaN | 
+| no-norm | 3e-3 | 💥 NaN @ step 500 | 
 | no-norm | 3e-4 | 1.505 | 
 | post-norm | 3e-3 | 1.420 |
-| pre-norm | 3e-3 | 🏅1.365
+| pre-norm | 3e-3 | 🏅1.365 |
 
 ![layer_norm](assets/layernorm_sweep.png)
 
-**Interpretation**: The advantage of pre-norm is real but **depth-dependent**. 
-At this scale, post-norm remains viable; at production scale, pre-norm's 
-benefits compound. This is consistent with the empirical shift from 
-post-norm (Transformer 2017, BERT) to pre-norm (GPT-2/3, LLaMA) as 
-model depth grew.
+**Impact of RMSNorm**: At the optimal LR (3e-3), removing RMSNorm causes 
+loss to explode to ~10⁸ within 500 steps. Stability is recoverable with 
+lr=3e-4, but the 0.14 gap to baseline shows RMSNorm enables effective 
+optimization at larger step sizes — not just numerical stability.
+
+**Pre-norm vs post-norm**: Post-norm trains stably at lr=3e-3 with only a 
+0.055 gap. Less dramatic than reports in deeper architectures (Xiong et al. 
+2020) — the advantage of pre-norm is **depth-dependent**, consistent with 
+the empirical shift from post-norm (Transformer 2017, BERT) to pre-norm 
+(GPT/LLaMA) as model depth grew.
 
 ## Generation samples
 
@@ -95,7 +89,7 @@ Coherent at the sentence level, but the dog's role is contradictory
 (scared the cat then needed help) and the story ends with a moralizing 
 template common in under-trained TinyStories models.
 
-**lr=3e-3, val_loss=1.366** (best LR):
+**lr=3e-3, val_loss=1.365** (best LR):
 > Once upon a time, a little cat wanted to find his mom. Then,
 he saw a big dog. The dog had a collar. The cat said, "I can't find your mom!" The dog looked at the cat and said, "I can help you!"
 The cat and the dog looked for the dog's mom. They walked and walked. They asked other animals if they saw her. No one said it was his mom. But then, they saw something unexpected. A big bird was in the tree! The cat and the dog were scared.
@@ -104,6 +98,18 @@ The cat said, "I'm sorry, I was just playing. I don't know where my mom is." The
 Longer narrative arc, multi-character interaction (cat + dog + bird), 
 consistent goal tracking (finding mom), and natural resolution. 
 A 0.11 val_loss difference translates to clearly improved coherence.
+
+
+## Methodology Notes
+
+- **All runs single-seed (seed=42)**. Gaps smaller than ~0.05 in val_loss 
+  should be interpreted cautiously without multi-seed validation.
+- **All comparisons under fixed token budget** (~328M tokens), not to 
+  convergence. Rankings hold for this compute regime; absolute optima 
+  under longer training may differ.
+- **Iso-token, not iso-step**: KR2 scales total_iters inversely with 
+  batch_size to maintain ~328M token budget across all runs.
+  
 
 ## Quickstart
 
