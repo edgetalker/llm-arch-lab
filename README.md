@@ -74,6 +74,29 @@ optimization at larger step sizes — not just numerical stability.
 the empirical shift from post-norm (Transformer 2017, BERT) to pre-norm 
 (GPT/LLaMA) as model depth grew.
 
+
+### Position Encoding
+
+**Setup**: Compared RoPE (baseline) vs no position encoding. All other 
+components held constant.
+
+| Variant | val_loss| val_ppl | 
+| --- | --- |  --- | 
+| no PE | 1.426 | 4.16 |
+| RoPE | 1.365 | 3.91 |
+
+![Position Encoding](assets/pe_ablation.png)
+
+**Findings**:
+1. **no-PE is trainable but consistently worse**: val_loss converges to 1.44 
+   vs RoPE's 1.36 — a 0.08 gap maintained across the full training trajectory.
+2. **No catastrophic failure**: unlike RMSNorm removal, the model still learns 
+   token co-occurrence patterns from the causal mask alone. TinyStories' short, 
+   linear structure makes this partial recovery possible.
+3. **PE benefit is immediate, not delayed**: the gap is established within the 
+   first ~1000 steps and remains stable, suggesting position encoding aids 
+   optimization from initialization, not just final performance.
+
 ## Generation samples
 
 Same prompt: `"Once upon a time, there was"`, temperature=0.8, top-p=0.9.
