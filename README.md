@@ -8,6 +8,9 @@ ablations on MoE and linear-attention architectures.
 > 📁 This repo covers: Lab 1 Basics
 
 
+## 优化点
++ train_bpe: 预编译正则 + 维护大根堆（替代查找最大pair）
++ 统计学习不要求无限量数据，BPE 训练高度依赖数据采样（Subsampling）
 ## Results
 
 ### LR Sweep 

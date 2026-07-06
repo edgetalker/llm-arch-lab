@@ -12,12 +12,36 @@ from archlab.trainer.train_tokenizer import train_bpe
 
 
 # ============ 配置 ============
-INPUT_TXT = "data/TinyStoriesV2-GPT4-train.txt"   
+INPUT_TXT = "data/owt_valid.txt"   
 VOCAB_SIZE = 10000                                  
 SPECIAL_TOKENS = ["<|endoftext|>"]
-OUTPUT_DIR = Path("trainer/tokenizer")
+OUTPUT_DIR = Path("/archlab/trainer/tokenizer")
 # ==============================
 
+import os
+import random
+
+def sample_corpus(input_path: str, output_path: str, target_size_mb: int = 800):
+    """
+    无偏采样：从 11GB 语料中均匀抽取约指定大小的子集，用于 BPE 词表训练。
+    """
+    file_size = os.path.getsize(input_path)
+    chunk_size = 1024 * 1024  # 1MB 块
+    num_chunks = (target_size_mb * 1024 * 1024) // chunk_size
+    
+    print(f"正在从 {file_size / 1e9:.2f} GB 语料中均匀抽取 {target_size_mb} MB 数据...")
+    
+    # 随机产生不重叠的块起点偏移量
+    offsets = random.sample(range(0, file_size - chunk_size, chunk_size), num_chunks)
+    
+    with open(input_path, "rb") as f_in, open(output_path, "wb") as f_out:
+        for offset in sorted(offsets):
+            f_in.seek(offset)
+            # 丢弃块开头可能被截断的第一行，确保行完整性
+            f_in.readline()
+            f_out.write(f_in.read(chunk_size - 100))  # 留出余量保证大致大小
+
+    print(f"采样完成！已生成训练子集：{output_path}")
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
