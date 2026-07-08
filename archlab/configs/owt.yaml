@@ -1,0 +1,40 @@
+model:
+  vocab_size: 32000
+  context_length: 1024
+  d_model: 768
+  num_layers: 12
+  num_heads: 12
+  d_ff: 2048
+  theta: 10000.0
+
+optim:
+  lr: 6e-4
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1
+  max_lr: 6e-4
+  min_lr: 6e-5
+  warmup_iters: 1000
+  cosine_cycle_iters: 10448
+  grad_clip: 1.0
+
+train:
+  batch_size: 16
+  total_iters: 167168
+  seed: 42
+  device: auto
+  dtype: bf16
+  log_interval: 200
+  eval_interval: 500
+  eval_iters: 10
+  ckpt_interval: 500
+
+io:
+  train_data_path: /root/autodl-tmp/owt_train.bin
+  val_data_path: /root/autodl-tmp/owt_valid.bin
+  ckpt_dir: runs/owt
+  resume_from: null
+  keep_last_k: 3
+  wandb_project: cs336-archlab
+  wandb_run_name: OpenWebText
+  no_wandb: false

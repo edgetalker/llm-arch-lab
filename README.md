@@ -137,6 +137,20 @@ A 0.11 val_loss difference translates to clearly improved coherence.
   batch_size to maintain ~328M token budget across all runs.
   
 
+## Speedrun
++ 使用 5090（~31GB 显存） 训练自定义 Transformer 模型，完成 OpenWeText 的训练，验证损失 < 5.0，算力为 B200 45 分钟的训练
+
+### Tokenizer
++ train: 5.08GB (2.74B)
++ validaiton: 126.71MB
+
+### Implement
++ ✅ 模型构建成功，参数量正确（134.11M）
++ ❌ 持续出现 CUDA OOM
+1. batch_size 从 128 → 64 → 32 → 16
+2. accumulation_steps 相应增加
+3. torch.compile 已禁用
+4. 混合精度（bf16）已启用
 ## Quickstart
 
 ```bash

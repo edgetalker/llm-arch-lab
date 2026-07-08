@@ -9,12 +9,14 @@ from typing import Optional, Union
 from collections.abc import Callable, Iterable
 
 def cross_entropy(
-    logits: Float[Tensor, "... vocab_size"],
+    logits: Float[Tensor, "bsz seq vocab_size"],
     targets: Int[Tensor, "..."]
 ) -> Tensor:
-    logit_max = logits.amax(dim=-1, keepdim=True)
-    z = logits - logit_max
-    lse = logit_max.squeeze(-1) + torch.log(torch.exp(z).sum(-1))
+    # native implement:
+    # logit_max = logits.amax(dim=-1, keepdim=True)
+    # z = logits - logit_max
+    # lse = logit_max.squeeze(-1) + torch.log(torch.exp(z).sum(-1))
+    lse = torch.logsumexp(logits, dim=-1)
 
     tgt_logit = logits.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
     log_prob = lse - tgt_logit
@@ -106,18 +108,21 @@ def gradient_clipping(
         parameters = [parameters]
 
     grads = [p.grad for p in parameters if p.grad is not None]
+    if not grads:
+        return torch.tensor(0.0)
 
-    device = grads[0].device
-    total_norm = torch.norm(
-        torch.stack([torch.norm(g.detach(), p=2).to(device) for g in grads]),
-        p = 2,
-    )
+    total_norm_sq = 0.0
+    for g in grads:
+        total_norm_sq += g.detach().float().pow(2).sum()
+    
+    total_norm = total_norm_sq.sqrt()
 
     clip_coef = max_norm / (total_norm + eps)
     clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
 
-    for g in grads:
-        g.mul_(clip_coef_clamped)
+    if clip_coef_clamped < 1.0:
+        for g in grads:
+            g.mul_(clip_coef_clamped)
 
     return total_norm
 
