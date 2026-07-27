@@ -13,6 +13,7 @@ from archlab.trainer.train_tokenizer import train_bpe
 
 # ============ 配置 ============
 INPUT_TXT = "data/owt_valid.txt"   
+# OWT: 32000
 VOCAB_SIZE = 10000                                  
 SPECIAL_TOKENS = ["<|endoftext|>"]
 OUTPUT_DIR = Path("/archlab/trainer/tokenizer")

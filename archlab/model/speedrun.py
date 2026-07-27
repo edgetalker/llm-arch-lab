@@ -2,7 +2,9 @@ import math
 import torch
 from torch import Tensor
 import torch.nn as nn
+import warnings
 
+import einx
 from einops import einsum, rearrange
 from jaxtyping import Int, Float, Bool
 
@@ -24,9 +26,7 @@ class Linear(nn.Module):
         std = math.sqrt(2 / (in_features + out_features))
         torch.nn.init.trunc_normal_(self.weight, std=std, mean=0.0, a=-3*std, b=3*std)
 
-    def forward(
-        self, x: Float[Tensor, "... in_dim"]
-    ) -> Float[Tensor, "... out_dim"]:
+    def forward(self, x: Float[Tensor, "... in_dim"]) -> Float[Tensor, "... out_dim"]:
         return einsum(x, self.weight, "... in_dim, out_dim in_dim -> ... out_dim")
     
 # Embedding
@@ -44,9 +44,7 @@ class Embedding(nn.Module):
         # torch.nn.init.trunc_normal_(self.weight, std=1, mean=0.0, a=-3, b=3)
         torch.nn.init.trunc_normal_(self.weight, std=0.02, mean=0.0, a=-0.06, b=0.06)
 
-    def forward(
-        self, token_ids: Int[Tensor, "..."]
-    ) -> Float[Tensor, "... d_model"]:
+    def forward(self, token_ids: Int[Tensor, "..."]) -> Float[Tensor, "... d_model"]:
         return self.weight[token_ids]
     
 class RMSNorm(nn.Module):
@@ -61,15 +59,17 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
         self.eps = eps
 
-    def forward(
-        self, x: Float[Tensor, "... d_model"]
-    ) -> Float[Tensor, "... d_model"]:
+    def forward(self, x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_model"]:
         in_dtype = x.dtype
         x = x.to(torch.float32)
         rms = torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-        return (x * rms * self.weight).to(in_dtype)
+        x = x * rms
 
-# FFN(x) = w2(ReLU^2 * w3x)
+        return (x * self.weight).to(in_dtype)
+    
+def silu(x: torch.Tensor):
+    return x * torch.sigmoid(x)
+
 class PositionwiseFFN(nn.Module):
     def __init__(
         self, 
@@ -83,62 +83,68 @@ class PositionwiseFFN(nn.Module):
         self.w3 = Linear(d_model, d_ff, device=device, dtype=dtype)
         self.w2 = Linear(d_ff, d_model, device=device, dtype=dtype)
     
-    def forward(
-        self, x: Float[Tensor, "... d_model"]
-    ) -> Float[Tensor, "... d_model"]:
-        act = self.w1(x)
-        gate = torch.relu(act) ** 2
-        value = self.w3(x)
-        return self.w2(gate * value)
-    
-def _rotate_pair(x: Float[Tensor, "... d"]) -> Float[Tensor, "... d"]:
-    """
-    Rotate pairs by 90°: (x0, x1, x2, x3, ...) -> (-x1, x0, -x3, x2, ...)
-    """
-    x_even = x[..., ::2]
-    x_odd = x[..., 1::2]
-    x_rot = torch.stack((-x_odd, x_even), dim=-1)
-    return x_rot.flatten(-2)
+    def forward(self, x):
+        return self.w2(silu(self.w1(x))* self.w3(x))
 
-class RotaryPositionalEmbedding(nn.Module):
+class SpeedRunFFN(nn.Module):
     def __init__(
         self,
-        theta: float,
-        d_k: int,
-        max_seq_len: int,
-        device: torch.device | None = None, 
+        d_model: int, 
+        d_ff: int,
     ):
         super().__init__()
-        self.d_k = d_k
-        self.theta = theta
-        self.max_seq_len = max_seq_len
+        self.W1 = Linear(d_model, d_ff)
+        self.W2 = Linear(d_ff, d_model)
 
-        # Frequencies: theta_i = theta^(-2i/d_k) for i in [0, d_k/2)
-        half_dim = torch.arange(0, d_k, 2, dtype=torch.float32, device=device)
-        inv_freq = theta ** (-half_dim / d_k)
+    def forward(self, x):
+        x = self.W1(x)
+        x = torch.relu(x) ** 2   
+        x = self.W2(x)
+        return x
+    
+class RotaryEmbedding(nn.Module):
+    def __init__(self, context_length: int, dim: int, theta: float = 10000.0):
+        super().__init__()
+        self.register_buffer(
+            "_freq_cis_cache", RotaryEmbedding._init_cache(context_length, dim, theta)
+        )
+        self._freq_cis_cache: Float[Tensor, "2 context_length half_dim"]
 
-        # Outer product: positions × frequencies
-        t = torch.arange(max_seq_len, dtype=torch.float32, device=device)
-        freqs = torch.outer(t, inv_freq) #[max_seq_len, inv_freq]
+    @staticmethod
+    def _init_cache(context_length: int, dim: int, theta: float) -> Float[Tensor, "2 context_length half_dim"]:
+        assert dim % 2 == 0
 
-        cos = torch.repeat_interleave(torch.cos(freqs), 2, dim=-1)
-        sin = torch.repeat_interleave(torch.sin(freqs), 2, dim=-1)
+        d = torch.arange(0, dim, 2) / dim
+        freqs = torch.tensor(theta) ** -d
+        t = torch.arange(context_length)
 
-        self.register_buffer("cos_cached", cos, persistent=False)
-        self.register_buffer("sin_cached", sin, persistent=False)
+        freqs = einsum(t, freqs, "t, f -> t f")
+
+        cos, sin = torch.cos(freqs), torch.sin(freqs)
+        return torch.stack((cos, sin))
 
     def forward(
-        self, x: Float[Tensor, "... d_k"],
-        token_positions: Int[Tensor, "seq_len"]
-    ) -> Float[Tensor, "... d_k"]:
-        cos = self.cos_cached[token_positions]
-        sin = self.sin_cached[token_positions]
-        return x * cos + _rotate_pair(x) * sin
+        self, x: Float[Tensor, "... seq d"], pos_id: Int[Tensor, "... seq"] | None
+    ) -> Float[Tensor, "... seq d"]:
+        x1, x2 = rearrange(x, "... (half_d xy) -> xy ... half_d", xy=2).unbind(0)
+
+        if pos_id is not None:
+            cos, sin = einx.get_at("cos_sin [pos] half_dim, ... -> cos_sin ... half_dim", self._freq_cis_cache, pos_id)
+        else:
+            seq_len = x.size(-2)
+            cos, sin = self._freq_cis_cache[:, :seq_len, :].unbind(0)
+
+        # 2D rotation matrix applied to pairs in x
+        x1_rot = cos * x1 - sin * x2
+        x2_rot = sin * x1 + cos * x2
+
+        result = torch.concat((x1_rot, x2_rot), dim=-1)
+        return result
     
-def _softmax(x: Float[Tensor, "..."], dim: int) -> Float[Tensor, "..."]:
-    x = x - x.amax(dim=dim, keepdim=True)
-    exp_x = x.exp()
-    return exp_x / exp_x.sum(dim=dim, keepdim=True)
+def softmax(x: Float[Tensor, "..."], dim: int = -1) -> Float[Tensor, "..."]:
+    x = x - torch.max(x, dim=dim, keepdim=True)[0]
+    exp_x = torch.exp(x)
+    return exp_x / torch.sum(x, dim=dim, keepdim=True)
 
 def scaled_dot_product_attention(
     q: Float[Tensor, "... d_k"],
@@ -150,7 +156,7 @@ def scaled_dot_product_attention(
     score = einsum(q, k, "... q d, ... k d -> ... q k") / math.sqrt(d_k)
     if mask is not None:
         score = score.masked_fill(~mask, float('-inf'))
-    attn = _softmax(score, dim=-1)
+    attn = softmax(score)
     return einsum(attn, v, "... q k, ... k d -> ... q d")
 
 class MultiHeadAttention(nn.Module):
@@ -158,27 +164,29 @@ class MultiHeadAttention(nn.Module):
         self,
         d_model: int,
         num_heads: int,
-        theta: float | None = None,
-        max_seq_len: int | None = None,
+        positional_encoder: RotaryEmbedding | None = None,
     ):
         super().__init__()
+        if positional_encoder is None:
+            warnings.warn("No positional encoder provided", stacklevel=2)
+            
         assert d_model % num_heads == 0
         self.d_model =d_model
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads
 
-        self.W_q = Linear(self.d_model, self.d_model)
-        self.W_k = Linear(self.d_model, self.d_model)
-        self.W_v = Linear(self.d_model, self.d_model)
-        self.W_o = Linear(self.d_model, self.d_model)
+        self.d_k = d_model // num_heads
+        self.d_v = self.d_k
+
+        self.W_q = Linear(self.d_model, self.num_heads * self.d_k)
+        self.W_k = Linear(self.d_model, self.num_heads * self.d_k)
+        self.W_v = Linear(self.d_model, self.num_heads * self.d_v)
+
+        self.W_o = Linear(self.num_heads * self.d_v, self.d_model)
 
         self.q_norm = RMSNorm(self.d_k)
         self.k_norm = RMSNorm(self.d_k)
 
-        if max_seq_len is not None and theta is not None:
-            self.rope = RotaryPositionalEmbedding(theta=theta, d_k=self.d_k, max_seq_len=max_seq_len)
-        else:
-            self.rope = None
+        self.positional_encoder: RotaryEmbedding | None = positional_encoder 
     
     def forward(
         self, x: Float[Tensor, "batch_size seq_len d_model"],
@@ -193,11 +201,12 @@ class MultiHeadAttention(nn.Module):
         v = rearrange(v, "... seq (h d) -> ... h seq d", h = self.num_heads)
 
         # RoPE on K V
-        if self.rope is not None:
-            if token_positions is None:
-                token_positions = torch.arange(seq_len, device=q.device)
-            q = self.rope(q, token_positions)
-            k = self.rope(k, token_positions)
+        if self.positional_encoder is not None:
+            if token_positions is not None:
+                token_positions = rearrange(token_positions, "... seq -> ... 1 seq")
+            
+            q = self.positional_encoder(q, token_positions)
+            k = self.positional_encoder(k, token_positions)
 
         # QKNorm
         q = self.q_norm(q)
@@ -206,7 +215,7 @@ class MultiHeadAttention(nn.Module):
         # Causal Mask
         mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device))
         attn = scaled_dot_product_attention(q, k, v, mask)
-        attn = rearrange(attn, "... h seq d -> ... seq (h d)")
+        attn = rearrange(attn, "... h seq d -> ... seq (h d)").contiguous()
 
         return self.W_o(attn)
     
@@ -216,29 +225,24 @@ class TransformerBlock(nn.Module):
         d_model: int,
         num_heads: int,
         d_ff: int,
-        theta: float,
-        max_seq_len: int,
+        positional_encoder: RotaryEmbedding | None,
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(d_model=d_model, num_heads=num_heads, theta=theta, max_seq_len=max_seq_len)
+        self.attn = MultiHeadAttention(
+            d_model=d_model, 
+            num_heads=num_heads, 
+            positional_encoder=positional_encoder,
+        )
         self.ln1 = RMSNorm(d_model=d_model)
-        self.ffn = PositionwiseFFN(d_model=d_model, d_ff=d_ff)
+        self.ffn = SpeedRunFFN(d_model=d_model, d_ff=d_ff)
         self.ln2 = RMSNorm(d_model=d_model)
     
-    def forward(
-        self, x: Float[Tensor, "... d_model"],
-        token_positions: Int[Tensor, "..."] | None = None,
-    ) -> Float[Tensor, "... d_model"]:
+    def forward(self, x: torch.Tensor):
         # 使用 checkpoint 包装注意力层
-        x = x + cp.checkpoint(
-            self.attn, self.ln1(x), token_positions,
-            use_reentrant=False 
-        )
+        x = x + self.attn(self.ln1(x))
+
         # 使用 checkpoint 包装 FFN 层
-        x = x + cp.checkpoint(
-            self.ffn, self.ln2(x),
-            use_reentrant=False
-        )
+        x = x + self.ffn(self.ln2(x))
         return x
     
 class TransformerLM(nn.Module):
@@ -250,30 +254,33 @@ class TransformerLM(nn.Module):
         num_layers: int,
         num_heads: int,
         d_ff: int,
-        theta: float
+        theta: float | None = 10000.0
     ):
         super().__init__()
+        self.context_length = context_length
+        self.d_model = d_model
         self.token_embeddings = Embedding(vocab_size, d_model)
+        d_head = d_model // num_heads
+        self.positional_encoder = (
+            RotaryEmbedding(context_length, d_head, theta) if theta is not None else None
+        )
+
         self.layers = nn.ModuleList([
             TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff,
-                             theta=theta, max_seq_len=context_length)
+                             positional_encoder=self.positional_encoder)
             for _ in range(num_layers)
         ])
-        self.context_length = context_length
         self.ln_final = RMSNorm(d_model=d_model)
         self.lm_head = Linear(d_model, vocab_size)
 
-        self.lm_head.weight = self.token_embeddings.weight
-
     def forward(
         self, x: Int[Tensor, "batch_size seq_len"],
-        token_positions: Float[Tensor, "..."] | None = None,
     ) -> Float[Tensor, "... vocab_size"]:
         x = self.token_embeddings(x)
-        if token_positions is None:
-            token_positions = torch.arange(x.size(-2), device=x.device)
+        
         for layer in self.layers:
-            x = layer(x, token_positions=token_positions)
+            x = layer(x)
+
         return self.lm_head(self.ln_final(x))
 
 ################## Generate ##################
@@ -289,7 +296,7 @@ def _sample_next_token(
     else:
         logits = logits / temperature
 
-    probs = _softmax(logits, -1)
+    probs = softmax(logits)
 
     if top_p is not None:
         sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
@@ -349,3 +356,10 @@ def generate(
         
     return tokenizer.decode(generated_ids)
 
+if __name__ == "__main__":
+    model = TransformerLM(vocab_size=32000, context_length=1024, d_model=768, d_ff=3072, num_heads=12, num_layers=12)
+    params = sum(p.numel() for p in model.parameters())
+    print(f"model parameters: {params / 1e6:.2f}M") 
+    input = torch.randint(0, 32000, (2, 1024))
+    logits = model(input)
+    print(logits.shape)

@@ -8,12 +8,12 @@ model:
   theta: 10000.0
 
 optim:
-  lr: 6e-4
+  lr: 3e-4
   betas: [0.9, 0.95]
   eps: 1.0e-8
   weight_decay: 0.1
-  max_lr: 6e-4
-  min_lr: 6e-5
+  max_lr: 3e-4
+  min_lr: 3e-5
   warmup_iters: 1000
   cosine_cycle_iters: 10448
   grad_clip: 1.0

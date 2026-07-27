@@ -1,9 +1,5 @@
-import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
 import math
 import torch
-torch.cuda.empty_cache()
 import time
 import numpy as np
 import random
@@ -13,9 +9,11 @@ from pathlib import Path
 from dataclasses import asdict
 
 from archlab.model.baseline import TransformerLM
-from archlab.trainer.train_model import *
+from archlab.trainer.train_model import (
+    AdamW, cross_entropy, get_batch, get_lr_cosine_schedule,
+    gradient_clipping, save_checkpoint, load_checkpoint
+)
 from archlab.trainer.config_loader import parse_args
-
 
 def set_seed(seed: int = 42) -> None:
     random.seed(seed)
@@ -103,8 +101,6 @@ def main():
     print(f"device: {device}")
     wandb = init_wandb(cfg) 
 
-    start_time = time.time()
-    MAX_RUNTIME = 5.5 * 3600   # 19800 秒
     # 数据
     train_data = np.memmap(cfg.io.train_data_path, dtype=np.uint16, mode="r")
     val_data   = np.memmap(cfg.io.val_data_path,   dtype=np.uint16, mode="r")
@@ -125,26 +121,17 @@ def main():
     # 训练循环
     model.train()
     t_log = time.time()
-    accumulation_steps = 8
-    logical_step = 0
-    accum_loss = 0.0
-
     for step in range(start_step, cfg.train.total_iters):
-        # 每步检查时间（确保精确）
-        if time.time() - start_time > MAX_RUNTIME * 0.98:
-            break
-
         # 1. LR schedule
-        if step % accumulation_steps == 0:
-            lr = get_lr_cosine_schedule(
-                logical_step,                   
-                cfg.optim.max_lr,
-                cfg.optim.min_lr,
-                cfg.optim.warmup_iters,
-                cfg.optim.cosine_cycle_iters,
-            )
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr
+        lr = get_lr_cosine_schedule(
+            step,                   
+            cfg.optim.max_lr,
+            cfg.optim.min_lr,
+            cfg.optim.warmup_iters,
+            cfg.optim.cosine_cycle_iters,
+        )
+        for pg in optimizer.param_groups:
+            pg["lr"] = lr
 
         # 2. 采 batch
         x, y = get_batch(
@@ -155,66 +142,55 @@ def main():
         )
 
         # 3. forward + backward
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits = model(x)
-            loss = cross_entropy(logits, y) / accumulation_steps
 
+        loss = cross_entropy(logits, y)
         loss.backward()
-        accum_loss += loss.item() * accumulation_steps
+        grad_norm = gradient_clipping(model.parameters(), cfg.optim.grad_clip)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+       
+        # 4. log
+        if step % cfg.train.log_interval == 0:
+            now = time.time()
+            dt = now - t_log
+            tok_per_step = cfg.train.batch_size * cfg.model.context_length
+            tok_per_sec = tok_per_step * cfg.train.log_interval / max(dt, 1e-6)
+            metrics = {
+                "train/loss": loss.item(),
+                "train/lr": lr,
+                "train/grad_norm": grad_norm,
+                "train/tok_per_sec": tok_per_sec,
+            }
+            
+            if wandb is not None:
+                wandb.log(metrics, step=step)
+            
+            print(
+                f"step {step:5d}  loss {loss.item():.4f}  lr {lr:.2e}  "
+                f"|g| {grad_norm:.3f}  tok/s {tok_per_sec:.0f}"
+            )
+            t_log = now
 
-        del logits
-
-        # 4. gradient accumulation
-        if (step + 1) % accumulation_steps == 0:
-            grad_norm = gradient_clipping(model.parameters(), cfg.optim.grad_clip)
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-
-            # average loss
-            avg_loss = accum_loss / accumulation_steps
-            accum_loss = 0.0   
-            logical_step += 1
-
-            # 5. log
-            if logical_step % cfg.train.log_interval == 0:
-                now = time.time()
-                dt = now - t_log
-                effective_batch = cfg.train.batch_size * accumulation_steps
-                tok_per_step = effective_batch * cfg.model.context_length
-                tok_per_sec = tok_per_step * cfg.train.log_interval / max(dt, 1e-6)
-                metrics = {
-                    "train/loss": avg_loss,
-                    "train/lr": lr,
-                    "train/grad_norm": grad_norm,
-                    "train/tok_per_sec": tok_per_sec,
-                }
-                
-                if wandb is not None:
-                    wandb.log(metrics, step=logical_step)
-                
-                print(f"step {logical_step:5d}  loss {avg_loss:.4f}  lr {lr:.2e}  |g| {grad_norm:.3f}  tok/s {tok_per_sec:.0f}")
-                t_log = now
-
-            # 6. eval
-            if logical_step > 0 and logical_step % cfg.train.eval_interval == 0:
-                val_loss = evaluate(model, val_data, cfg, device)
-                val_ppl = math.exp(val_loss)
-                
-                if wandb is not None:
-                    wandb.log({"val/loss": val_loss, "val/ppl": val_ppl}, step=logical_step)
-                
-                print(f"step {logical_step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {val_ppl:.2f}")
+        # 5. eval
+        if step > 0 and step % cfg.train.eval_interval == 0:
+            val_loss = evaluate(model, val_data, cfg, device)
+            val_ppl = math.exp(val_loss)
+            
+            if wandb is not None:
+                wandb.log({"val/loss": val_loss, "val/ppl": val_ppl}, step=step)
+            
+            print(f"step {step:5d}  ├─ val_loss {val_loss:.4f}  val_ppl {val_ppl:.2f}")
         
-            # 7. ckp
-            if logical_step > 0 and logical_step % cfg.train.ckpt_interval == 0:
-                save_with_retention(model, optimizer, logical_step, cfg)
+        # 6. ckp
+        if step > 0 and step % cfg.train.ckpt_interval == 0:
+            save_with_retention(model, optimizer, step, cfg)
 
-    final_val_loss = evaluate(model, val_data, cfg, device)
-    print(f"Final Validation Loss: {final_val_loss:.4f}")
-    save_with_retention(model, optimizer, logical_step, cfg)
+    save_with_retention(model, optimizer, cfg.train.total_iters, cfg)
 
     if wandb is not None:
         wandb.finish()
-        
+
 if __name__ == "__main__":
     main()
