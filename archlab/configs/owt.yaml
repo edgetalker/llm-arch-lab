@@ -4,7 +4,7 @@ model:
   d_model: 768
   num_layers: 12
   num_heads: 12
-  d_ff: 2048
+  d_ff: 3072
   theta: 10000.0
 
 optim:

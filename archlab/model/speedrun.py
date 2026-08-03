@@ -2,6 +2,7 @@ import math
 import torch
 from torch import Tensor
 import torch.nn as nn
+import torch.nn.functional as F
 import warnings
 
 import einx
@@ -9,7 +10,8 @@ from einops import einsum, rearrange
 from jaxtyping import Int, Float, Bool
 
 from archlab.tokenizer.bpe_tokenizer import Tokenizer
-import torch.utils.checkpoint as cp 
+from flash_attention import flashattention
+from archlab.trainer.train_model import AdamW
 
 # Linear
 class Linear(nn.Module):
@@ -41,8 +43,7 @@ class Embedding(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(num_embeddings, embedding_dim, device=device, dtype=dtype))
 
-        # torch.nn.init.trunc_normal_(self.weight, std=1, mean=0.0, a=-3, b=3)
-        torch.nn.init.trunc_normal_(self.weight, std=0.02, mean=0.0, a=-0.06, b=0.06)
+        torch.nn.init.trunc_normal_(self.weight, std=1, mean=0.0, a=-3, b=3)
 
     def forward(self, token_ids: Int[Tensor, "..."]) -> Float[Tensor, "... d_model"]:
         return self.weight[token_ids]
@@ -159,6 +160,14 @@ def scaled_dot_product_attention(
     attn = softmax(score)
     return einsum(attn, v, "... q k, ... k d -> ... q d")
 
+def triton_attention_mha(q, k, v, causal):
+    B, H, N, D = q.shape
+    out = flashattention.apply(q.reshape(B*H, N, D),
+                                k.reshape(B*H, N, D),
+                                v.reshape(B*H, N, D),
+                                causal)
+    return out.reshape(B, H, N, D)
+
 class MultiHeadAttention(nn.Module):
     def __init__(
         self,
@@ -212,9 +221,7 @@ class MultiHeadAttention(nn.Module):
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # Causal Mask
-        mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=q.device))
-        attn = scaled_dot_product_attention(q, k, v, mask)
+        attn = triton_attention_mha(q, k, v, True)
         attn = rearrange(attn, "... h seq d -> ... seq (h d)").contiguous()
 
         return self.W_o(attn)
@@ -238,10 +245,7 @@ class TransformerBlock(nn.Module):
         self.ln2 = RMSNorm(d_model=d_model)
     
     def forward(self, x: torch.Tensor):
-        # 使用 checkpoint 包装注意力层
         x = x + self.attn(self.ln1(x))
-
-        # 使用 checkpoint 包装 FFN 层
         x = x + self.ffn(self.ln2(x))
         return x
     
@@ -357,9 +361,50 @@ def generate(
     return tokenizer.decode(generated_ids)
 
 if __name__ == "__main__":
-    model = TransformerLM(vocab_size=32000, context_length=1024, d_model=768, d_ff=3072, num_heads=12, num_layers=12)
+    model = TransformerLM(vocab_size=32000, context_length=1024, d_model=768, d_ff=3072, num_heads=12, num_layers=12).to("cuda")
     params = sum(p.numel() for p in model.parameters())
     print(f"model parameters: {params / 1e6:.2f}M") 
-    input = torch.randint(0, 32000, (2, 1024))
-    logits = model(input)
-    print(logits.shape)
+
+    model = torch.compile(model)
+    optimizer = AdamW(model.parameters())
+    input = torch.randint(0, 32000, (16, 1024)).to("cuda")
+
+    # 预热步数
+    warmup_steps = 10
+    for step in range(warmup_steps):
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            logits = model(input)
+            loss = F.cross_entropy(logits.flatten(0,1), input.flatten(0,1))
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+
+    torch.cuda.synchronize() 
+    total_steps = 1000
+    step_times = []
+    
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+
+    for step in range(total_steps):
+        start_event.record()    
+
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            logits = model(input)
+            loss = F.cross_entropy(logits.flatten(0,1), input.flatten(0,1))
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        
+        end_event.record()
+        end_event.synchronize()
+        
+        elapsed_ms = start_event.elapsed_time(end_event)
+        elapsed_s = elapsed_ms / 1000.0
+    
+        # 计算吞吐量
+        tokens = 16 * 1024 
+        tok_per_sec = tokens / elapsed_s
+    
+        if step % 10 == 0:
+            print(f"step: {step}, loss: {loss.item():.4f}, time: {elapsed_ms:.2f} ms, throughput: {tok_per_sec:.0f} tok/s")

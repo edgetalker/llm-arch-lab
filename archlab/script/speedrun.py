@@ -1,5 +1,6 @@
 import math
 import torch
+import torch.nn.functional as F
 import time
 import numpy as np
 import random
@@ -144,8 +145,7 @@ def main():
         # 3. forward + backward
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             logits = model(x)
-
-        loss = cross_entropy(logits, y)
+            loss = F.cross_entropy(logits, y)
         loss.backward()
         grad_norm = gradient_clipping(model.parameters(), cfg.optim.grad_clip)
         optimizer.step()
